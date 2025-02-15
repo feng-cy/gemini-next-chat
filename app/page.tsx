@@ -40,7 +40,9 @@ import { textStream, simpleTextStream } from '@/utils/textStream'
 import { encodeToken } from '@/utils/signature'
 import type { FileManagerOptions } from '@/utils/FileManager'
 import { fileUpload, imageUpload } from '@/utils/upload'
+import { parseOffice, isOfficeFile } from '@/utils/officeParser'
 import { findOperationById } from '@/utils/plugin'
+import { generateImages, type ImageGenerationRequest } from '@/utils/generateImages'
 import { detectLanguage, formatTime, readFileAsDataURL } from '@/utils/common'
 import { cn } from '@/utils'
 import { GEMINI_API_BASE_URL } from '@/constant/urls'
@@ -71,6 +73,7 @@ const AssistantRecommend = dynamic(() => import('@/components/AssistantRecommend
 const Setting = dynamic(() => import('@/components/Setting'))
 const FileUploader = dynamic(() => import('@/components/FileUploader'))
 const PluginList = dynamic(() => import('@/components/PluginList'))
+const ModelSelect = dynamic(() => import('@/components/ModelSelect'))
 
 export default function Home() {
   const { t } = useTranslation()
@@ -85,6 +88,7 @@ export default function Home() {
   const stopGeneratingRef = useRef<boolean>(false)
   const messagesRef = useRef(useMessageStore.getState().messages)
   const messages = useMessageStore((state) => state.messages)
+  const title = useMessageStore((state) => state.title)
   const systemInstruction = useMessageStore((state) => state.systemInstruction)
   const systemInstructionEditMode = useMessageStore((state) => state.systemInstructionEditMode)
   const chatLayout = useMessageStore((state) => state.chatLayout)
@@ -107,6 +111,7 @@ export default function Home() {
   const [executingPlugins, setExecutingPlugins] = useState<string[]>([])
   const [enablePlugin, setEnablePlugin] = useState<boolean>(true)
   const [status, setStatus] = useState<'thinkng' | 'silence' | 'talking'>('silence')
+  const conversationTitle = useMemo(() => (title ? title : t('chatAnything')), [title, t])
   const statusText = useMemo(() => {
     switch (status) {
       case 'silence':
@@ -343,7 +348,6 @@ export default function Home() {
         onMessage: (content) => {
           text += content
           setMessage(text)
-          // scrollToBottom()
         },
         onStatement: (statement) => {
           if (talkMode === 'voice') {
@@ -368,7 +372,6 @@ export default function Home() {
           addMessage(message)
           setMessage('')
           setThinkingMessage('')
-          // scrollToBottom()
           setIsThinking(false)
           stopGeneratingRef.current = false
           setExecutingPlugins([])
@@ -405,7 +408,7 @@ export default function Home() {
 
   const handleFunctionCall = useCallback(
     async (functionCalls: FunctionCall[]) => {
-      const { model } = useSettingStore.getState()
+      const { apiKey, apiProxy, password, model } = useSettingStore.getState()
       const { add: addMessage } = useMessageStore.getState()
       const { installed } = usePluginStore.getState()
       const pluginExecuteResults: Record<string, unknown> = {}
@@ -472,8 +475,23 @@ export default function Home() {
         // if (!isEmpty(cookie)) payload.cookie = cookie
         try {
           if (baseUrl.startsWith('@plugins/')) {
-            const result = await pluginHandle(pluginId, payload)
-            pluginExecuteResults[call.name] = result
+            if (pluginId === 'OfficialImagen') {
+              if (payload.query) {
+                const options =
+                  apiKey !== ''
+                    ? { apiKey, baseUrl: apiProxy || GEMINI_API_BASE_URL }
+                    : { token: encodeToken(password), baseUrl: '/api/google' }
+                const result = await generateImages({
+                  ...options,
+                  model: 'imagen-3.0-generate-002',
+                  params: payload.query as unknown as ImageGenerationRequest,
+                })
+                pluginExecuteResults[call.name] = result
+              }
+            } else {
+              const result = await pluginHandle(pluginId, payload)
+              pluginExecuteResults[call.name] = result
+            }
           } else {
             let url = payload.baseUrl
             const options: RequestInit = {
@@ -640,6 +658,7 @@ export default function Home() {
       setContent('')
       clearAttachment()
       setTextareaHeight(TEXTAREA_DEFAULT_HEIGHT)
+      scrollToBottom()
       await fetchAnswer({
         messages,
         model,
@@ -648,7 +667,7 @@ export default function Home() {
         onError: handleError,
       })
     },
-    [isOldVisionModel, fetchAnswer, handleResponse, handleFunctionCall, handleError, checkAccessStatus],
+    [isOldVisionModel, fetchAnswer, handleResponse, handleFunctionCall, handleError, checkAccessStatus, scrollToBottom],
   )
 
   const handleResubmit = useCallback(
@@ -667,6 +686,7 @@ export default function Home() {
           }
         }
       }
+      scrollToBottom()
       await fetchAnswer({
         messages: [...messagesRef.current],
         model,
@@ -675,7 +695,7 @@ export default function Home() {
         onError: handleError,
       })
     },
-    [fetchAnswer, handleResponse, handleFunctionCall, handleError, checkAccessStatus],
+    [fetchAnswer, handleResponse, handleFunctionCall, handleError, checkAccessStatus, scrollToBottom],
   )
 
   const handleCleanMessage = useCallback(() => {
@@ -758,9 +778,17 @@ export default function Home() {
       const fileList: File[] = []
 
       if (files) {
+        const fileList: File[] = []
         for (let i = 0; i < files.length; i++) {
           const file = files[i]
           if (mimeType.includes(file.type)) {
+            if (isOfficeFile(file.type)) {
+              const newFile = await parseOffice(file, { type: 'file' })
+              if (newFile instanceof File) fileList.push(newFile)
+            } else {
+              fileList.push(file)
+            }
+          } else if (file.type.startsWith('text/')) {
             fileList.push(file)
           }
         }
@@ -908,13 +936,21 @@ export default function Home() {
   }, [])
 
   return (
-    <main className="mx-auto flex h-screen w-full max-w-screen-md flex-col justify-between overflow-hidden">
-      <div className="flex justify-between px-4 pb-2 pr-2 pt-10 max-md:pt-4 max-sm:pr-2 max-sm:pt-4">
-        <div className="flex flex-row text-xl leading-8 text-red-400 max-sm:text-base">
-          <MessageCircleHeart className="h-10 w-10 max-sm:h-8 max-sm:w-8" />
-          <div className="ml-2 font-bold leading-10 max-sm:ml-1 max-sm:leading-8">Gemini Next Chat</div>
+    <main className="mx-auto flex h-screen max-h-[-webkit-fill-available] w-full max-w-screen-md flex-col justify-between overflow-hidden">
+      <div className="flex w-full justify-between px-4 pb-2 pr-2 pt-10 max-md:pt-4 max-sm:pr-2 max-sm:pt-4">
+        <div className="flex items-center text-red-400">
+          <div>
+            <MessageCircleHeart className="h-10 w-10 max-sm:h-8 max-sm:w-8" />
+          </div>
+          <div className="ml-1 flex-1 max-sm:ml-0.5">
+            <h2 className="text-line-clamp break-all font-bold leading-6 max-sm:text-sm">{conversationTitle}</h2>
+            <ModelSelect
+              className="flex h-4 justify-start border-none px-0 py-0 leading-4 text-slate-500 hover:text-slate-700 dark:hover:text-slate-400"
+              defaultModel={model}
+            />
+          </div>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex w-32 items-center gap-1 max-sm:gap-0">
           <a href="https://github.com/u14app/gemini-next-chat" target="_blank">
             <Button className="h-8 w-8" title={t('github')} variant="ghost" size="icon">
               <Github className="h-5 w-5" />
@@ -955,7 +991,7 @@ export default function Home() {
               <div
                 className={cn(
                   'group text-slate-500 transition-colors last:text-slate-800 hover:text-slate-800 dark:last:text-slate-400 dark:hover:text-slate-400 max-sm:hover:bg-transparent',
-                  msg.role === 'model' && msg.parts && msg.parts[0].functionCall ? 'hidden' : '',
+                  msg.role === 'model' && msg.parts && msg.parts[0]?.functionCall ? 'hidden' : '',
                 )}
                 key={msg.id}
               >

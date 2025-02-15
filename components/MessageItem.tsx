@@ -32,11 +32,13 @@ import Button from '@/components/Button'
 import Weather, { type WeatherResult } from '@/components/plugins/Weather'
 import Unsplash from '@/components/plugins/Unsplash'
 import Arxiv from '@/components/plugins/Arxiv'
+import Imagen from '@/components/plugins/Imagen'
 import { useMessageStore } from '@/store/chat'
 import { useSettingStore } from '@/store/setting'
 import { usePluginStore } from '@/store/plugin'
 import AudioStream from '@/utils/AudioStream'
 import { sentenceSegmentation } from '@/utils/common'
+import type { ImageGenerationResponse } from '@/utils/generateImages'
 import { cn } from '@/utils'
 import { OFFICAL_PLUGINS } from '@/plugins'
 import { isFunction, find, findLastIndex, isUndefined } from 'lodash-es'
@@ -215,7 +217,7 @@ function MessageItem(props: Props) {
   }
 
   const MessageContent = () => {
-    if (role === 'model' && parts && parts[0].text === '') {
+    if (role === 'model' && parts && parts[0]?.text === '') {
       return <BubblesLoading />
     } else if (role === 'function' && parts && parts[0].functionResponse) {
       const pluginsDetail: {
@@ -247,6 +249,9 @@ function MessageItem(props: Props) {
             {detail.id === OFFICAL_PLUGINS.WEATHER ? <Weather data={detail.response.content as WeatherResult} /> : null}
             {detail.id === OFFICAL_PLUGINS.UNSPLASH ? (
               <Unsplash data={detail.response.content as UnsplashImage[]} />
+            ) : null}
+            {detail.id === OFFICAL_PLUGINS.IMAGEN ? (
+              <Imagen data={(detail.response.content as ImageGenerationResponse)?.images} />
             ) : null}
             {detail.id === OFFICAL_PLUGINS.ARXIV ? (
               <Arxiv data={(detail.response.content as ArxivResult)?.data} />
@@ -391,10 +396,12 @@ function MessageItem(props: Props) {
       if (groundingMetadata) {
         const { groundingSupports = [], groundingChunks = [] } = groundingMetadata
         groundingSupports.forEach((item) => {
-          content = content.replace(
-            item.segment.text,
-            `${item.segment.text}${item.groundingChunkIndices.map((indice) => `[[${indice + 1}][gs-${indice}]]`).join('')}`,
-          )
+          if (item.segment) {
+            content = content.replace(
+              item.segment.text,
+              `${item.segment.text}${item.groundingChunkIndices.map((indice) => `[[${indice + 1}][gs-${indice}]]`).join('')}`,
+            )
+          }
         })
         content += `\n\n${groundingChunks.map((item, idx) => `[gs-${idx}]: <${item.web?.uri}> "${item.web?.title}"`).join('\n')}`
       }
