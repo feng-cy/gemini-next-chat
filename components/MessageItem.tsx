@@ -1,6 +1,7 @@
 'use client'
 import dynamic from 'next/dynamic'
 import { useEffect, useState, useCallback, useRef, useMemo, memo } from 'react'
+import type { InlineDataPart } from '@xiangfa/generative-ai'
 import { useTranslation } from 'react-i18next'
 import Lightbox from 'yet-another-react-lightbox'
 import LightboxFullscreen from 'yet-another-react-lightbox/plugins/fullscreen'
@@ -85,32 +86,32 @@ function MessageItem(props: Props) {
   const fileList = useMemo(() => {
     return attachments ? attachments.filter((item) => !item.mimeType.startsWith('image/')) : []
   }, [attachments])
-  const inlineImageList = useMemo(() => {
-    const imageList: string[] = []
+  const imageList = useMemo(() => {
+    const images: string[] = []
     parts.forEach(async (part) => {
       if (part.fileData && attachments) {
         for (const attachment of attachments) {
           if (attachment.metadata?.uri === part.fileData.fileUri) {
             if (part.fileData?.mimeType.startsWith('image/')) {
-              if (attachment.dataUrl) imageList.push(attachment.dataUrl)
-              if (attachment.preview) imageList.push(attachment.preview)
+              if (attachment.dataUrl) images.push(attachment.dataUrl)
+              if (attachment.preview) images.push(attachment.preview)
             }
           }
         }
-      } else if (part.inlineData?.mimeType.startsWith('image/')) {
+      } else if (role !== 'model' && part.inlineData?.mimeType.startsWith('image/')) {
         imageList.push(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`)
       }
     })
-    return imageList
-  }, [parts, attachments])
-  const inlineAudioList = useMemo(() => {
-    const audioList: string[] = []
+    return images
+  }, [role, parts, attachments])
+  const audioList = useMemo(() => {
+    const audios: string[] = []
     parts.forEach(async (part) => {
       if (part.inlineData?.mimeType.startsWith('audio/')) {
-        audioList.push(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`)
+        audios.push(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`)
       }
     })
-    return audioList
+    return audios
   }, [parts])
   const content = useMemo(() => {
     let text = ''
@@ -276,16 +277,16 @@ function MessageItem(props: Props) {
               <FileList fileList={fileList} />
             </div>
           ) : null}
-          {inlineAudioList.length > 0 ? (
+          {audioList.length > 0 ? (
             <div className="not:last:border-dashed not:last:border-b flex w-full flex-wrap pb-2">
-              {inlineAudioList.map((audio, idx) => {
+              {audioList.map((audio, idx) => {
                 return <AudioPlayer key={idx} className="mb-2" src={audio} />
               })}
             </div>
           ) : null}
-          {inlineImageList.length > 0 ? (
+          {imageList.length > 0 ? (
             <div className="flex flex-wrap gap-2 pb-2">
-              {inlineImageList.map((image, idx) => {
+              {imageList.map((image, idx) => {
                 return (
                   <div key={idx} className="group/image relative cursor-pointer" onClick={() => openLightbox(idx)}>
                     {
@@ -323,15 +324,28 @@ function MessageItem(props: Props) {
                 <Magicdown>{html}</Magicdown>
               </div>
               {groundingMetadata ? (
-                <div
-                  className="mx-0.5 my-2"
-                  dangerouslySetInnerHTML={{
-                    __html:
-                      groundingMetadata.searchEntryPoint?.renderedContent
-                        ?.replace('margin: 0 8px', 'margin: 0 4px')
-                        .replaceAll('<a', '<a target="_blank"') || '',
-                  }}
-                ></div>
+                <>
+                  <ul className="my-2 inline-flex gap-1">
+                    {groundingMetadata.groundingChunks?.map((item, idx) => {
+                      return (
+                        <li className="rounded-full border bg-gray-50 px-4 py-1 dark:bg-gray-950" key={idx}>
+                          <a href={item.web?.uri} target="_blank">
+                            {item.web?.title}
+                          </a>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                  <div
+                    className="mx-0.5 my-2"
+                    dangerouslySetInnerHTML={{
+                      __html:
+                        groundingMetadata.searchEntryPoint?.renderedContent
+                          ?.replace('margin: 0 8px', 'margin: 0 4px')
+                          .replaceAll('<a', '<a target="_blank"') || '',
+                    }}
+                  ></div>
+                </>
               ) : null}
               <div
                 className={cn(
@@ -393,17 +407,18 @@ function MessageItem(props: Props) {
         }
       })
       let content = messageParts.join('')
-      if (groundingMetadata) {
-        const { groundingSupports = [], groundingChunks = [] } = groundingMetadata
-        groundingSupports.forEach((item) => {
-          if (item.segment) {
-            content = content.replace(
-              item.segment.text,
-              `${item.segment.text}${item.groundingChunkIndices.map((indice) => `[[${indice + 1}][gs-${indice}]]`).join('')}`,
-            )
+      if (role === 'model') {
+        const inlineImageList: InlineDataPart['inlineData'][] = []
+        parts.forEach((item) => {
+          if (item.inlineData?.mimeType.startsWith('image/')) {
+            inlineImageList.push(item.inlineData)
           }
         })
-        content += `\n\n${groundingChunks.map((item, idx) => `[gs-${idx}]: <${item.web?.uri}> "${item.web?.title}"`).join('\n')}`
+        content +=
+          '\n\n' +
+          inlineImageList
+            .map((item, idx) => `[image-${idx}]: <${`data:${item.mimeType};base64,${item.data}`}>`)
+            .join('\n')
       }
       setHtml(content)
     }
@@ -418,7 +433,7 @@ function MessageItem(props: Props) {
       <Lightbox
         open={showLightbox}
         close={() => setShowLightbox(false)}
-        slides={inlineImageList.map((item) => ({ src: item }))}
+        slides={imageList.map((item) => ({ src: item }))}
         index={lightboxIndex}
         plugins={[LightboxFullscreen]}
       />
